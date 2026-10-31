@@ -1,0 +1,10 @@
+{
+  "domain": "iphone_ai_voice",
+  "name": "iPhone AI Voice",
+  "version": "0.1.0",
+  "documentation": "https://github.com/SirPumpkin797/crucible-llm-server/blob/feature/iphone-ai-voice-server/VOICE_SERVER.md",
+  "requirements": [],
+  "codeowners": [],
+  "iot_class": "local_polling",
+  "config_flow": true
+}
