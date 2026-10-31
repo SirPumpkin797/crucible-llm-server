@@ -134,6 +134,26 @@ class HTTPServer {
             sendResponse(connection: connection, status: "200 OK", body: "Crucible LLM Server is running")
         case "/v1/models", "/api/tags":
             handleModels(connection: connection)
+        case "/v1/audio/transcriptions":
+            if method == "POST" {
+                handleSpeechTranscription(request: request, connection: connection)
+            } else {
+                sendResponse(connection: connection, status: "405 Method Not Allowed", body: "{\"error\":\"POST required\"}", contentType: "application/json")
+            }
+        case "/v1/audio/speak":
+            if method == "POST" {
+                handleSpeechPlayback(request: request, connection: connection)
+            } else {
+                sendResponse(connection: connection, status: "405 Method Not Allowed", body: "{\"error\":\"POST required\"}", contentType: "application/json")
+            }
+        case "/v1/voice/status":
+            Task { @MainActor in
+                let voice = self.llamaState?.voiceService
+                _ = await voice?.requestAuthorization()
+                let json: [String: Any] = ["language": "zh-CN", "available": voice?.speechAvailable ?? false,
+                    "on_device": voice?.onDeviceAvailable ?? false, "status": voice?.status ?? "No state"]
+                self.sendJSON(connection: connection, object: json)
+            }
         case "/v1/chat/completions":
             if method == "POST" {
                 handleChatCompletion(request: request, connection: connection)
@@ -215,6 +235,62 @@ class HTTPServer {
                 self.sendResponse(connection: connection, status: "500 Internal Server Error",
                                   body: "{\"error\":\"Failed to serialize response\"}", contentType: "application/json")
             }
+        }
+    }
+
+    private func requestJSON(_ request: String) -> [String: Any]? {
+        guard let separator = request.range(of: "\r\n\r\n"),
+              let body = String(request[separator.upperBound...]).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
+        return json
+    }
+
+    private func sendJSON(connection: NWConnection, object: [String: Any], status: String = "200 OK") {
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let string = String(data: data, encoding: .utf8) else {
+            sendResponse(connection: connection, status: "500 Internal Server Error", body: "{}")
+            return
+        }
+        sendResponse(connection: connection, status: status, body: string, contentType: "application/json")
+    }
+
+    // JSON contract: { "audio_base64": "<base64 WAV>", "require_offline": false }
+    private func handleSpeechTranscription(request: String, connection: NWConnection) {
+        guard let body = requestJSON(request),
+              let encoded = body["audio_base64"] as? String,
+              let audio = Data(base64Encoded: encoded) else {
+            sendJSON(connection: connection, object: ["error": "Expected JSON audio_base64 containing WAV audio"], status: "400 Bad Request")
+            return
+        }
+        let offline = body["require_offline"] as? Bool ?? false
+        Task { @MainActor in
+            guard let voice = self.llamaState?.voiceService else {
+                self.sendJSON(connection: connection, object: ["error": "Voice service missing"], status: "503 Service Unavailable")
+                return
+            }
+            do {
+                let text = try await voice.transcribe(wavData: audio, requireOffline: offline)
+                self.sendJSON(connection: connection, object: ["text": text, "language": "zh-CN"])
+            } catch {
+                self.sendJSON(connection: connection, object: ["error": error.localizedDescription], status: "422 Unprocessable Entity")
+            }
+        }
+    }
+
+    // Speaks through this iPhone's own speaker, not through Echo/HA.
+    private func handleSpeechPlayback(request: String, connection: NWConnection) {
+        guard let body = requestJSON(request), let text = body["text"] as? String,
+              !text.isEmpty, text.count <= 2000 else {
+            sendJSON(connection: connection, object: ["error": "Expected text, up to 2000 characters"], status: "400 Bad Request")
+            return
+        }
+        Task { @MainActor in
+            guard let voice = self.llamaState?.voiceService else {
+                self.sendJSON(connection: connection, object: ["error": "Voice service missing"], status: "503 Service Unavailable")
+                return
+            }
+            voice.speakChinese(text)
+            self.sendJSON(connection: connection, object: ["accepted": true, "output": "iphone_speaker"])
         }
     }
 
