@@ -19,6 +19,7 @@ class LlamaState: ObservableObject {
     @Published var serverRunning = false
     @Published var serverAddress = ""
     let httpServer = HTTPServer(port: 8080)
+    let voiceService = VoiceService()
 
     private var llamaContext: LlamaContext?
     private var inferenceBusy = false
