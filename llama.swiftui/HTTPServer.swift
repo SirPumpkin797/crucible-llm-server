@@ -140,6 +140,12 @@ class HTTPServer {
             } else {
                 sendResponse(connection: connection, status: "405 Method Not Allowed", body: "{\"error\":\"POST required\"}", contentType: "application/json")
             }
+        case "/v1/audio/speech":
+            if method == "POST" {
+                handleSpeechAudio(request: request, connection: connection)
+            } else {
+                sendJSON(connection: connection, object: ["error": "POST required"], status: "405 Method Not Allowed")
+            }
         case "/v1/audio/speak":
             if method == "POST" {
                 handleSpeechPlayback(request: request, connection: connection)
@@ -271,6 +277,27 @@ class HTTPServer {
             do {
                 let text = try await voice.transcribe(wavData: audio, requireOffline: offline)
                 self.sendJSON(connection: connection, object: ["text": text, "language": "zh-CN"])
+            } catch {
+                self.sendJSON(connection: connection, object: ["error": error.localizedDescription], status: "422 Unprocessable Entity")
+            }
+        }
+    }
+
+    // Return WAV audio as JSON Base64 for HA custom integration.
+    private func handleSpeechAudio(request: String, connection: NWConnection) {
+        guard let body = requestJSON(request), let text = body["input"] as? String,
+              !text.isEmpty && text.count <= 2000 else {
+            sendJSON(connection: connection, object: ["error": "Expected input up to 2000 characters"], status: "400 Bad Request")
+            return
+        }
+        Task { @MainActor in
+            guard let voice = self.llamaState?.voiceService else {
+                self.sendJSON(connection: connection, object: ["error": "Voice service unavailable"], status: "503 Service Unavailable")
+                return
+            }
+            do {
+                let audio = try await voice.renderSpeechWAV(text)
+                self.sendJSON(connection: connection, object: ["audio_base64": audio.base64EncodedString(), "format": "wav"])
             } catch {
                 self.sendJSON(connection: connection, object: ["error": error.localizedDescription], status: "422 Unprocessable Entity")
             }
