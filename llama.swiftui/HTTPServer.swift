@@ -57,13 +57,49 @@ class HTTPServer {
 
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: .global(qos: .userInitiated))
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
-            guard let self = self, let data = data, error == nil else {
+        receiveRequest(connection, accumulated: Data())
+    }
+
+    private func receiveRequest(_ connection: NWConnection, accumulated: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self, error == nil else {
                 connection.cancel()
                 return
             }
-            let request = String(data: data, encoding: .utf8) ?? ""
-            self.routeRequest(request, connection: connection)
+            var buffer = accumulated
+            if let data { buffer.append(data) }
+            // Prevent unbounded request buffering on a memory-constrained device.
+            guard buffer.count <= 1_048_576 else {
+                self.sendResponse(connection: connection, status: "413 Payload Too Large",
+                                  body: "{\"error\":\"Request too large\"}", contentType: "application/json")
+                return
+            }
+            if let headerBoundary = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                let headerData = buffer[..<headerBoundary.lowerBound]
+                let header = String(data: headerData, encoding: .utf8) ?? ""
+                let contentLengthLine = header.components(separatedBy: "\r\n")
+                    .first { $0.lowercased().hasPrefix("content-length:") }
+                let requiredBodyLength = contentLengthLine.flatMap {
+                    Int($0.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces) ?? "")
+                } ?? 0
+                guard requiredBodyLength >= 0, requiredBodyLength <= 1_048_576 else {
+                    self.sendResponse(connection: connection, status: "413 Payload Too Large",
+                                      body: "{\"error\":\"Request too large\"}", contentType: "application/json")
+                    return
+                }
+                let bodyStart = headerBoundary.upperBound
+                if buffer.count - bodyStart >= requiredBodyLength {
+                    let request = String(data: buffer, encoding: .utf8) ?? ""
+                    self.routeRequest(request, connection: connection)
+                    return
+                }
+            }
+            if isComplete {
+                self.sendResponse(connection: connection, status: "400 Bad Request",
+                                  body: "{\"error\":\"Incomplete request\"}", contentType: "application/json")
+            } else {
+                self.receiveRequest(connection, accumulated: buffer)
+            }
         }
     }
 
