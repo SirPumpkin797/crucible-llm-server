@@ -141,7 +141,7 @@ class LlamaState: ObservableObject {
     private func chatPrompt(_ text: String) -> String {
         // Match the active model's expected instruction delimiters.
         // Qwen2.5 uses ChatML; TinyLlama Chat uses Llama-2 instructions.
-        return "<|im_start|>user\n\\(text)<|im_end|>\n<|im_start|>assistant\n"
+        return "<|im_start|>user\n\(text)<|im_end|>\n<|im_start|>assistant\n"
     }
 
     func complete(text: String) async {
@@ -154,12 +154,13 @@ class LlamaState: ObservableObject {
         let started = DispatchTime.now().uptimeNanoseconds
         let response = await runCompletion(text: text, maxTokens: 128)
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / NS_PER_S
-        messageLog += "\nUser: \\(text)\nAssistant: \\(response)\nElapsed: \\(String(format: "%.2f", elapsed))s\n"
+        messageLog += "\nUser: \(text)\nAssistant: \(response)\nElapsed: \(String(format: "%.2f", elapsed))s\n"
     }
 
     private func runCompletion(text: String, maxTokens: Int) async -> String {
         guard let llamaContext else { return "Error: No model loaded" }
-        await llamaContext.completion_init(text: chatPrompt(text))
+        let prompt = text.contains("<|im_start|>") ? text : chatPrompt(text)
+        await llamaContext.completion_init(text: prompt)
         var output = ""
         var generated = 0
         let limit = min(max(1, maxTokens), 256)
@@ -179,15 +180,6 @@ class LlamaState: ObservableObject {
         guard !inferenceBusy, let llamaContext else { return }
         inferenceBusy = true
         defer { inferenceBusy = false }
-        do {
-            // Benchmark also uses the shared llama context; serialize it with chat.
-            try await Task.sleep(nanoseconds: 1)
-        } catch {}
-        /*guard let llamaContext else {
-            return
-        }
-
-        */
         messageLog += "\n"
         messageLog += "Running benchmark...\n"
         messageLog += "Model info: "
