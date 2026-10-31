@@ -34,6 +34,7 @@ actor LlamaContext {
     private var temporary_invalid_cchars: [CChar]
 
     var n_len: Int32 = 1024
+    private var generationLimit: Int32 = 256
     var n_cur: Int32 = 0
 
     var n_decode: Int32 = 0
@@ -118,6 +119,10 @@ actor LlamaContext {
         print("attempting to complete \"\(text)\"")
 
         is_done = false
+        n_cur = 0
+        n_decode = 0
+        llama_memory_clear(llama_get_memory(context), true)
+        llama_sampler_reset(sampling)
         tokens_list = tokenize(text: text, add_bos: true)
         temporary_invalid_cchars = []
 
@@ -126,8 +131,11 @@ actor LlamaContext {
 
         print("\n n_len = \(n_len), n_ctx = \(n_ctx), n_kv_req = \(n_kv_req)")
 
-        if n_kv_req > n_ctx {
-            print("error: n_kv_req > n_ctx, the required KV cache size is not big enough")
+        generationLimit = min(n_len, Int32(n_ctx))
+        if tokens_list.isEmpty || tokens_list.count >= Int(n_ctx) || tokens_list.count > 512 {
+            print("Invalid prompt: prompt exceeds available context or batch capacity")
+            is_done = true
+            return
         }
 
         for id in tokens_list {
@@ -144,17 +152,23 @@ actor LlamaContext {
 
         if llama_decode(context, batch) != 0 {
             print("llama_decode() failed")
+            is_done = true
+            return
         }
 
         n_cur = batch.n_tokens
     }
 
     func completion_loop() -> String {
+        guard !is_done, n_cur < generationLimit else {
+            is_done = true
+            return ""
+        }
         var new_token_id: llama_token = 0
 
         new_token_id = llama_sampler_sample(sampling, context, batch.n_tokens - 1)
 
-        if llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_len {
+        if llama_vocab_is_eog(vocab, new_token_id) || n_cur >= generationLimit - 1 {
             print("\n")
             is_done = true
             let new_token_str = String(cString: temporary_invalid_cchars + [0])
@@ -187,6 +201,7 @@ actor LlamaContext {
 
         if llama_decode(context, batch) != 0 {
             print("failed to evaluate llama!")
+            is_done = true
         }
 
         return new_token_str
@@ -293,6 +308,10 @@ actor LlamaContext {
     func clear() {
         tokens_list.removeAll()
         temporary_invalid_cchars.removeAll()
+        is_done = true
+        n_cur = 0
+        n_decode = 0
+        llama_sampler_reset(sampling)
         llama_memory_clear(llama_get_memory(context), true)
     }
 
