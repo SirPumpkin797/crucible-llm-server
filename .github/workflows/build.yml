@@ -2,7 +2,7 @@ name: Build iOS IPA
 
 on:
   push:
-    branches: [master, fix/inference-stability-20261031]
+    branches: [master, fix/inference-stability-20261031, feature/iphone-ai-voice-server]
   workflow_dispatch:
 
 jobs:
