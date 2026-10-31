@@ -3,9 +3,24 @@ import SwiftUI
 struct ContentView: View {
     @StateObject var llamaState = LlamaState()
     @State private var multiLineText = ""
+    @State private var blackScreen = false
     @State private var showingHelp = false    // To track if Help Sheet should be shown
 
     var body: some View {
+        Group {
+            if blackScreen {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    VStack {
+                        Spacer()
+                        Button("Exit black screen") { blackScreen = false }
+                            .foregroundColor(.gray.opacity(0.25))
+                            .font(.caption2)
+                            .padding(.bottom, 20)
+                    }
+                }
+                .persistentSystemOverlays(.hidden)
+            } else {
         NavigationView {
             VStack {
                 ScrollView(.vertical, showsIndicators: true) {
@@ -44,6 +59,18 @@ struct ContentView: View {
                 .padding()
 
                 HStack {
+                    Button("Voice status") {
+                        Task {
+                            _ = await llamaState.voiceService.requestAuthorization()
+                            llamaState.messageLog += "\nSpeech: \(llamaState.voiceService.status)\n"
+                        }
+                    }
+                    Button("Black screen") { blackScreen = true }
+                }
+                .font(.caption)
+                .padding(4)
+
+                HStack {
                     Button(llamaState.serverRunning ? "Stop Server" : "Start Server") {
                         llamaState.toggleServer()
                     }
@@ -67,6 +94,11 @@ struct ContentView: View {
             .padding()
             .navigationBarTitle("Model Settings", displayMode: .inline)
 
+        }
+            }
+        }
+        .onChange(of: blackScreen) { newValue in
+            UIApplication.shared.isIdleTimerDisabled = newValue
         }
     }
 
