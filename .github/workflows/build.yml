@@ -5,6 +5,9 @@ on:
     branches: [master, fix/inference-stability-20261031, feature/iphone-ai-voice-server]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -56,3 +59,14 @@ jobs:
         with:
           name: CrucibleLLM
           path: CrucibleLLM.ipa
+
+      - name: Publish direct IPA download (no ZIP)
+        if: github.ref == 'refs/heads/feature/iphone-ai-voice-server'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: voice-server-build-${{ github.run_number }}
+          name: iPhone Voice Server Build ${{ github.run_number }}
+          prerelease: true
+          generate_release_notes: false
+          files: CrucibleLLM.ipa
+          fail_on_unmatched_files: true
