@@ -22,6 +22,7 @@ class LlamaState: ObservableObject {
 
     private var llamaContext: LlamaContext?
     private var inferenceBusy = false
+    private var activeModelFilename = ""
     private var defaultModelUrl: URL? {
         Bundle.main.url(forResource: "ggml-model", withExtension: "gguf", subdirectory: "models")
         // Bundle.main.url(forResource: "llama-2-7b-chat", withExtension: "Q2_K.gguf", subdirectory: "models")
@@ -123,6 +124,7 @@ class LlamaState: ObservableObject {
         if let modelUrl {
             messageLog += "Loading model...\n"
             llamaContext = try LlamaContext.create_context(path: modelUrl.path())
+            activeModelFilename = modelUrl.lastPathComponent.lowercased()
             messageLog += "Loaded model \(modelUrl.lastPathComponent)\n"
 
             // Assuming that the model is successfully loaded, update the downloaded models
@@ -139,8 +141,14 @@ class LlamaState: ObservableObject {
 
 
     private func chatPrompt(_ text: String) -> String {
-        // Match the active model's expected instruction delimiters.
-        // Qwen2.5 uses ChatML; TinyLlama Chat uses Llama-2 instructions.
+        // Use the instruction format expected by each supported model family.
+        if activeModelFilename.contains("tinyllama") {
+            if activeModelFilename.contains("openorca") {
+                return "<|im_start|>user\n\(text)<|im_end|>\n<|im_start|>assistant\n"
+            }
+            return "<s>[INST] \(text) [/INST]"
+        }
+        // Qwen2.5 and other ChatML-compatible instruct models.
         return "<|im_start|>user\n\(text)<|im_end|>\n<|im_start|>assistant\n"
     }
 
