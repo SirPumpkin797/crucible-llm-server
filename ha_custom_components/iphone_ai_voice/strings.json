@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iPhone AI Voice",
+        "description": "Enter the iPhone server LAN URL",
+        "data": {
+          "url": "Server URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach iPhone server"
+    }
+  }
+}
