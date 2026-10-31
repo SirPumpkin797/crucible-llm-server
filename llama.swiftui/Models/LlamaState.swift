@@ -21,6 +21,7 @@ class LlamaState: ObservableObject {
     let httpServer = HTTPServer(port: 8080)
 
     private var llamaContext: LlamaContext?
+    private var inferenceBusy = false
     private var defaultModelUrl: URL? {
         Bundle.main.url(forResource: "ggml-model", withExtension: "gguf", subdirectory: "models")
         // Bundle.main.url(forResource: "llama-2-7b-chat", withExtension: "Q2_K.gguf", subdirectory: "models")
@@ -115,6 +116,10 @@ class LlamaState: ObservableObject {
         )
     ]
     func loadModel(modelUrl: URL?) throws {
+        guard !inferenceBusy else {
+            messageLog += "Model is busy; wait for generation to finish\n"
+            return
+        }
         if let modelUrl {
             messageLog += "Loading model...\n"
             llamaContext = try LlamaContext.create_context(path: modelUrl.path())
@@ -133,48 +138,56 @@ class LlamaState: ObservableObject {
     }
 
 
+    private func chatPrompt(_ text: String) -> String {
+        // Match the active model's expected instruction delimiters.
+        // Qwen2.5 uses ChatML; TinyLlama Chat uses Llama-2 instructions.
+        return "<|im_start|>user\n\\(text)<|im_end|>\n<|im_start|>assistant\n"
+    }
+
     func complete(text: String) async {
-        guard let llamaContext else {
+        guard !inferenceBusy, llamaContext != nil else {
+            messageLog += "Inference already in progress or no model loaded\n"
             return
         }
+        inferenceBusy = true
+        defer { inferenceBusy = false }
+        let started = DispatchTime.now().uptimeNanoseconds
+        let response = await runCompletion(text: text, maxTokens: 128)
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / NS_PER_S
+        messageLog += "\nUser: \\(text)\nAssistant: \\(response)\nElapsed: \\(String(format: "%.2f", elapsed))s\n"
+    }
 
-        let t_start = DispatchTime.now().uptimeNanoseconds
-        await llamaContext.completion_init(text: text)
-        let t_heat_end = DispatchTime.now().uptimeNanoseconds
-        let t_heat = Double(t_heat_end - t_start) / NS_PER_S
-
-        messageLog += "\(text)"
-
-        Task.detached {
-            while await !llamaContext.is_done {
-                let result = await llamaContext.completion_loop()
-                await MainActor.run {
-                    self.messageLog += "\(result)"
-                }
-            }
-
-            let t_end = DispatchTime.now().uptimeNanoseconds
-            let t_generation = Double(t_end - t_heat_end) / self.NS_PER_S
-            let tokens_per_second = Double(await llamaContext.n_len) / t_generation
-
-            await llamaContext.clear()
-
-            await MainActor.run {
-                self.messageLog += """
-                    \n
-                    Done
-                    Heat up took \(t_heat)s
-                    Generated \(tokens_per_second) t/s\n
-                    """
-            }
+    private func runCompletion(text: String, maxTokens: Int) async -> String {
+        guard let llamaContext else { return "Error: No model loaded" }
+        await llamaContext.completion_init(text: chatPrompt(text))
+        var output = ""
+        var generated = 0
+        let limit = min(max(1, maxTokens), 256)
+        while await !llamaContext.is_done && generated < limit {
+            let piece = await llamaContext.completion_loop()
+            output += piece
+            generated += 1
         }
+        await llamaContext.clear()
+        if let end = output.range(of: "<|im_end|>") {
+            output = String(output[..<end.lowerBound])
+        }
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func bench() async {
-        guard let llamaContext else {
+        guard !inferenceBusy, let llamaContext else { return }
+        inferenceBusy = true
+        defer { inferenceBusy = false }
+        do {
+            // Benchmark also uses the shared llama context; serialize it with chat.
+            try await Task.sleep(nanoseconds: 1)
+        } catch {}
+        /*guard let llamaContext else {
             return
         }
 
+        */
         messageLog += "\n"
         messageLog += "Running benchmark...\n"
         messageLog += "Model info: "
@@ -200,7 +213,7 @@ class LlamaState: ObservableObject {
     }
 
     func clear() async {
-        guard let llamaContext else {
+        guard !inferenceBusy, let llamaContext else {
             return
         }
 
@@ -230,40 +243,12 @@ class LlamaState: ObservableObject {
     }
 
     // Non-streaming completion for API use
-    func completeForAPI(text: String, maxTokens: Int = 500) async -> String {
-        guard let llamaContext else {
-            return "Error: No model loaded"
+    func completeForAPI(text: String, maxTokens: Int = 128) async -> String {
+        guard !inferenceBusy, llamaContext != nil else {
+            return "Error: Model busy or not loaded"
         }
-
-        await llamaContext.completion_init(text: text)
-        var result = ""
-        var tokenCount = 0
-
-        while await !llamaContext.is_done && tokenCount < maxTokens {
-            let piece = await llamaContext.completion_loop()
-            result += piece
-            tokenCount += 1
-        }
-
-        await llamaContext.clear()
-
-        // Strip <think>...</think> blocks from Qwen-style reasoning models
-        var cleaned = result
-        if let thinkStart = cleaned.range(of: "<think>") {
-            if let thinkEnd = cleaned.range(of: "</think>") {
-                // Full think block — take everything after it
-                cleaned = String(cleaned[thinkEnd.upperBound...])
-            } else {
-                // Think block consumed all tokens — take everything before it
-                cleaned = String(cleaned[..<thinkStart.lowerBound])
-            }
-        }
-
-        // Stop at first <|im_end|> — model may echo the prompt in a loop
-        if let endTag = cleaned.range(of: "<|im_end|>") {
-            cleaned = String(cleaned[..<endTag.lowerBound])
-        }
-
-        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        inferenceBusy = true
+        defer { inferenceBusy = false }
+        return await runCompletion(text: text, maxTokens: maxTokens)
     }
 }
