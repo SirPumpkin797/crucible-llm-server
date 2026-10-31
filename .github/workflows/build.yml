@@ -2,7 +2,7 @@ name: Build iOS IPA
 
 on:
   push:
-    branches: [master]
+    branches: [master, fix/inference-stability-20261031]
   workflow_dispatch:
 
 jobs:
