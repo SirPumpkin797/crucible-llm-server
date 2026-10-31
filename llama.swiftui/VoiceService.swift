@@ -60,6 +60,40 @@ final class VoiceService: NSObject, ObservableObject {
         return recognized
     }
 
+
+    /// Returns a WAV asset for Home Assistant/Echo playback rather than using this phone's speaker.
+    func renderSpeechWAV(_ text: String) async throws -> Data {
+        guard !text.isEmpty && text.count <= 2000 else { throw VoiceError.invalidText }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        utterance.rate = 0.48
+        var file: AVAudioFile?
+        var renderError: Error?
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            synthesizer.write(utterance) { audioBuffer in
+                guard let pcm = audioBuffer as? AVAudioPCMBuffer else { return }
+                if pcm.frameLength == 0 {
+                    continuation.resume()
+                    return
+                }
+                do {
+                    if file == nil {
+                        file = try AVAudioFile(forWriting: url, settings: pcm.format.settings)
+                    }
+                    try file?.write(from: pcm)
+                } catch {
+                    renderError = error
+                    continuation.resume()
+                }
+            }
+        }
+        if let renderError { throw renderError }
+        guard FileManager.default.fileExists(atPath: url.path) else { throw VoiceError.unavailable }
+        return try Data(contentsOf: url)
+    }
+
     func speakChinese(_ text: String) {
         synthesizer.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: text)
@@ -70,13 +104,14 @@ final class VoiceService: NSObject, ObservableObject {
 }
 
 enum VoiceError: LocalizedError {
-    case notAuthorized, unavailable, offlineUnavailable, invalidAudio
+    case notAuthorized, unavailable, offlineUnavailable, invalidAudio, invalidText
     var errorDescription: String? {
         switch self {
         case .notAuthorized: return "Speech recognition permission is not granted"
         case .unavailable: return "Chinese speech recognition is unavailable"
         case .offlineUnavailable: return "Chinese on-device recognition is not supported by this iPhone"
         case .invalidAudio: return "Provide a valid WAV file up to 8 MB"
+        case .invalidText: return "Provide 1-2000 characters"
         }
     }
 }
