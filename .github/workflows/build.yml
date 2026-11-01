@@ -50,12 +50,23 @@ jobs:
             DEVELOPMENT_TEAM="" \
             -derivedDataPath build
 
+      - name: Verify voice-enabled app build
+        run: |
+          APP_PATH=$(find build -name "*.app" -type d | head -1)
+          test -n "$APP_PATH"
+          /usr/libexec/PlistBuddy -c 'Print :NSSpeechRecognitionUsageDescription' "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$APP_PATH/Info.plist"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")
+          test -s "$APP_PATH/$EXECUTABLE"
+          echo "Build verification succeeded for $GITHUB_SHA"
+
       - name: Package IPA
         run: |
           APP_PATH=$(find build -name "*.app" -type d | head -1)
           echo "Found app at: $APP_PATH"
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
+          printf 'branch=%s\ncommit=%s\nrun=%s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" "$GITHUB_RUN_ID" > Payload/BUILD_INFO.txt
           zip -r CrucibleLLM.ipa Payload/
 
       - name: Upload IPA
@@ -69,6 +80,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: voice-server-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
           name: iPhone Voice Server Build ${{ github.run_number }}
           prerelease: true
           generate_release_notes: false
